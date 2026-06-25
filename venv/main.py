@@ -336,7 +336,7 @@ async def ask_for_file(callback_query: types.CallbackQuery, state: FSMContext):
     await state.set_state(TaskStates.waiting_for_file)
     
     await callback_query.message.edit_text(
-        text="📄 Отправьте файл (PDF, DOCX, TXT, JPG, PNG).\n\nПосле отправки файла вы сможете задать вопрос по его содержанию.",
+        text="📄 Отправьте файл (PDF, DOCX, TXT).\n\nПосле отправки файла вы сможете задать вопрос по его содержанию.",
         reply_markup=back_keyboard
     )
     await callback_query.answer()
