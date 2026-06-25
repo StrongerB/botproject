@@ -10,14 +10,13 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.enums import ParseMode
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, FSInputFile
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 import aiosqlite
 from config import BOT_TOKEN
 from texts import main_text, error_text
 from pypdf import PdfReader
 from docx import Document
 from openai import AsyncOpenAI
-import tempfile
 
 DB_PATH = 'users.db'
 
@@ -37,37 +36,30 @@ deepseek_client = AsyncOpenAI(
     base_url="https://api.aitunnel.ru/v1/"
 )
 
-mainkeyboard_markup = InlineKeyboardMarkup(
+main_keyboard = InlineKeyboardMarkup(
     inline_keyboard=[
-        [InlineKeyboardButton(text="😊 Профиль", callback_data="Профиль")],
-        [InlineKeyboardButton(text="❓ Задать вопрос", callback_data="Задать вопрос")],
-        [InlineKeyboardButton(text="📄 Отправить файл", callback_data="Отправить файл")],
-        [InlineKeyboardButton(text="📞 Помощь", callback_data="Помощь")]
+        [InlineKeyboardButton(text="😊 Профиль", callback_data="profile")],
+        [InlineKeyboardButton(text="❓ Задать вопрос", callback_data="ask_question")],
+        [InlineKeyboardButton(text="📄 Отправить файл", callback_data="send_file")],
+        [InlineKeyboardButton(text="📞 Помощь", callback_data="help")]
     ]
 )
 
-profilekeyboard_markup = InlineKeyboardMarkup(
+back_keyboard = InlineKeyboardMarkup(
     inline_keyboard=[
-        [InlineKeyboardButton(text="↶ Вернуться в меню", callback_data="Вернуться в меню")]   
+        [InlineKeyboardButton(text="↶ Вернуться в меню", callback_data="back_to_menu")]
     ]
 )
 
-helpkeyboard_markup = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [InlineKeyboardButton(text="↶ Вернуться в меню", callback_data="Вернуться в меню")]
-    ]
-)
-
-admin_keyboard_markup = InlineKeyboardMarkup(
+admin_keyboard = InlineKeyboardMarkup(
     inline_keyboard=[
         [InlineKeyboardButton(text="👑 Панель администратора", callback_data="admin_panel")],
-        [InlineKeyboardButton(text="↶ Вернуться в меню", callback_data="Вернуться в меню")]
+        [InlineKeyboardButton(text="↶ Вернуться в меню", callback_data="back_to_menu")]
     ]
 )
 
 class TaskStates(StatesGroup):
     waiting_for_question = State()
-    waiting_for_document = State()
     waiting_for_file = State()
     waiting_for_file_question = State()
 
@@ -97,90 +89,24 @@ def extract_text_from_bytes(file_bytes: bytes, file_name: str) -> str:
         logger.error(f"Ошибка извлечения текста из {file_name}: {e}")
         return ""
 
-async def upload_file_to_deepseek(file_bytes: bytes, file_name: str) -> str:
-    """Загружает файл в DeepSeek и возвращает ID файла"""
+async def ask_deepseek(user_question: str, file_text: str = None, file_name: str = None) -> str:
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_name.split('.')[-1]}") as tmp_file:
-            tmp_file.write(file_bytes)
-            tmp_file_path = tmp_file.name
-        
-        with open(tmp_file_path, 'rb') as file:
-            response = await deepseek_client.files.create(
-                file=file,
-                purpose="assistants"
-            )
-        
-        os.unlink(tmp_file_path)
-        return response.id
-    except Exception as e:
-        logger.error(f"Ошибка загрузки файла в DeepSeek: {e}")
-        return None
+        if file_text and file_text.strip():
+            system_prompt = f"""Ты корпоративный ИИ-ассистент. Отвечай на вопросы пользователей профессионально, 
+            четко и по делу. Используй информацию из предоставленного файла для ответа на вопрос.
+            Если информации в файле недостаточно - честно скажи об этом.
 
-async def ask_deepseek_with_file_upload(user_question: str, file_bytes: bytes, file_name: str) -> str:
-    """Отправляет вопрос с файлом в DeepSeek"""
-    try:
-        file_id = await upload_file_to_deepseek(file_bytes, file_name)
-        
-        if not file_id:
-            return "❌ Не удалось загрузить файл в нейросеть. Попробуйте другой файл или отправьте текст напрямую."
-        
-        system_prompt = """Ты корпоративный ИИ-ассистент. Отвечай на вопросы пользователей профессионально, 
-        четко и по делу. Используй информацию из предоставленного файла для ответа на вопрос.
-        Если информации в файле недостаточно - честно скажи об этом."""
-
-        response = await deepseek_client.chat.completions.create(
-            model="deepseek-v4-pro",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": [
-                    {"type": "text", "text": f"Проанализируй файл и ответь на вопрос:\n{user_question}"},
-                    {"type": "file", "file_id": file_id}
-                ]}
-            ],
-            stream=False
-        )
-        
-        return response.choices[0].message.content
-    except Exception as e:
-        logger.error(f"Ошибка DeepSeek API с файлом: {e}")
-        return f"❌ Произошла ошибка при анализе файла: {str(e)}"
-
-async def ask_deepseek_with_file_text(user_question: str, file_text: str, file_name: str) -> str:
-    """Отправляет вопрос с извлеченным текстом файла в DeepSeek"""
-    try:
-        if not file_text or file_text.strip() == "":
-            return "⚠️ Не удалось извлечь текст из файла. Попробуйте другой файл."
-        
-        system_prompt = f"""Ты корпоративный ИИ-ассистент. Отвечай на вопросы пользователей профессионально, 
-        четко и по делу. Используй информацию из предоставленного файла для ответа на вопрос.
-        Если информации в файле недостаточно - честно скажи об этом.
-
-        Имя файла: {file_name}
-        
-        Содержимое файла:
-        {file_text[:8000]}
-        """
+            Имя файла: {file_name}
+            
+            Содержимое файла:
+            {file_text[:8000]}
+            """
+        else:
+            system_prompt = """Ты корпоративный ИИ-ассистент. Отвечай на вопросы пользователей профессионально, 
+            четко и по делу. Если информации недостаточно - честно скажи об этом."""
         
         response = await deepseek_client.chat.completions.create(
-            model="deepseek-v4-flash",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_question}
-            ],
-            stream=False
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        logger.error(f"Ошибка DeepSeek API: {e}")
-        return f"❌ Произошла ошибка при анализе файла: {str(e)}"
-
-async def ask_deepseek(user_question: str) -> str:
-    try:
-        system_prompt = """Ты корпоративный ИИ-ассистент. Отвечай на вопросы пользователей профессионально, 
-        четко и по делу. Если информации недостаточно - честно скажи об этом."""
-        
-        response = await deepseek_client.chat.completions.create(
-            model="deepseek-v4-flash",
+            model="qwen3.7-plus",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_question}
@@ -228,7 +154,7 @@ async def init_db(user_id, username, first_name, is_bot):
             logger.error(f'Ошибка добавления пользователя: {e}')
             return False
 
-async def select_value_db(user_id):
+async def get_user_data(user_id):
     async with aiosqlite.connect(DB_PATH) as db:
         try:
             cursor = await db.execute(
@@ -244,7 +170,7 @@ async def select_value_db(user_id):
             logger.error(f"Ошибка загрузки данных: {e}")
             return None
 
-async def check_user_status(user_id: int) -> str:
+async def get_user_status(user_id: int) -> str:
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             'SELECT status FROM users WHERE id = ?', 
@@ -263,6 +189,18 @@ async def update_user_status(user_id: int, new_status: str):
         )
         await db.commit()
 
+async def increment_questions(user_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            'UPDATE users SET question_amount = question_amount + 1 WHERE id = ?',
+            (user_id,)
+        )
+        await db.commit()
+
+def get_user_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    user_status = asyncio.run(get_user_status(user_id))
+    return admin_keyboard if user_status == "admin" else main_keyboard
+
 @dp.message(Command('start'))
 async def start_command(message: types.Message):
     user_id = message.from_user.id
@@ -271,12 +209,9 @@ async def start_command(message: types.Message):
     is_bot = message.from_user.is_bot
     
     await init_db(user_id, username, first_name, is_bot)
-    user_status = await check_user_status(user_id)
+    user_status = await get_user_status(user_id)
     
-    if user_status == "admin":
-        keyboard = admin_keyboard_markup
-    else:
-        keyboard = mainkeyboard_markup
+    keyboard = admin_keyboard if user_status == "admin" else main_keyboard
     
     await message.answer(
         text=main_text,
@@ -284,20 +219,12 @@ async def start_command(message: types.Message):
         reply_markup=keyboard
     )
 
-@dp.callback_query(F.data == 'Меню')
-async def show_menu(callback_query: types.CallbackQuery):
+@dp.callback_query(F.data == 'back_to_menu')
+async def back_to_menu(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
-    username = callback_query.from_user.username
-    first_name = callback_query.from_user.first_name
-    is_bot = callback_query.from_user.is_bot
+    user_status = await get_user_status(user_id)
     
-    await init_db(user_id, username, first_name, is_bot)
-    user_status = await check_user_status(user_id)
-    
-    if user_status == "admin":
-        keyboard = admin_keyboard_markup
-    else:
-        keyboard = mainkeyboard_markup
+    keyboard = admin_keyboard if user_status == "admin" else main_keyboard
     
     await callback_query.message.edit_text(
         text=main_text,
@@ -306,7 +233,7 @@ async def show_menu(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-@dp.callback_query(F.data == 'Профиль')
+@dp.callback_query(F.data == 'profile')
 async def show_profile(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     username = callback_query.from_user.username
@@ -314,7 +241,7 @@ async def show_profile(callback_query: types.CallbackQuery):
     is_bot = callback_query.from_user.is_bot
     
     await init_db(user_id, username, first_name, is_bot)
-    result = await select_value_db(user_id)
+    result = await get_user_data(user_id)
     
     if result is None:
         await callback_query.message.answer(
@@ -331,14 +258,14 @@ async def show_profile(callback_query: types.CallbackQuery):
 <blockquote>Статус: {result[0]}</blockquote>
 <blockquote>Кол-во отправленных вопросов: {result[1]}</blockquote>
 '''
-    await callback_query.message.answer(
+    await callback_query.message.edit_text(
         text=profile_text,
         parse_mode=ParseMode.HTML,
-        reply_markup=profilekeyboard_markup
+        reply_markup=back_keyboard
     )
     await callback_query.answer("Профиль загружен")
 
-@dp.callback_query(F.data == 'Задать вопрос')
+@dp.callback_query(F.data == 'ask_question')
 async def ask_question(callback_query: types.CallbackQuery, state: FSMContext):
     user_id = callback_query.from_user.id
     username = callback_query.from_user.username
@@ -350,7 +277,7 @@ async def ask_question(callback_query: types.CallbackQuery, state: FSMContext):
     
     await callback_query.message.edit_text(
         text="❓ Напишите свой вопрос:",
-        reply_markup=mainkeyboard_markup
+        reply_markup=back_keyboard
     )
     await callback_query.answer()
 
@@ -368,14 +295,7 @@ async def process_question(message: types.Message, state: FSMContext):
     
     try:
         ai_response = await ask_deepseek(question)
-        
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                'UPDATE users SET question_amount = question_amount + 1 WHERE id = ?',
-                (user_id,)
-            )
-            await db.commit()
-        
+        await increment_questions(user_id)
         await state.clear()
         
         response_text = f"""
@@ -385,21 +305,27 @@ async def process_question(message: types.Message, state: FSMContext):
 
 <blockquote>📝 Ваш вопрос: {question}</blockquote>
 """
+        user_status = await get_user_status(user_id)
+        keyboard = admin_keyboard if user_status == "admin" else main_keyboard
+        
         await message.answer(
             text=response_text,
             parse_mode=ParseMode.HTML,
-            reply_markup=mainkeyboard_markup
+            reply_markup=keyboard
         )
     except Exception as e:
         logger.error(f"Ошибка обработки вопроса: {e}")
+        user_status = await get_user_status(user_id)
+        keyboard = admin_keyboard if user_status == "admin" else main_keyboard
+        
         await message.answer(
             text="❌ Произошла ошибка при обработке вашего вопроса. Попробуйте позже.",
             parse_mode=ParseMode.HTML,
-            reply_markup=mainkeyboard_markup
+            reply_markup=keyboard
         )
         await state.clear()
 
-@dp.callback_query(F.data == 'Отправить файл')
+@dp.callback_query(F.data == 'send_file')
 async def ask_for_file(callback_query: types.CallbackQuery, state: FSMContext):
     user_id = callback_query.from_user.id
     username = callback_query.from_user.username
@@ -411,7 +337,7 @@ async def ask_for_file(callback_query: types.CallbackQuery, state: FSMContext):
     
     await callback_query.message.edit_text(
         text="📄 Отправьте файл (PDF, DOCX, TXT, JPG, PNG).\n\nПосле отправки файла вы сможете задать вопрос по его содержанию.",
-        reply_markup=mainkeyboard_markup
+        reply_markup=back_keyboard
     )
     await callback_query.answer()
 
@@ -440,32 +366,37 @@ async def process_file(message: types.Message, state: FSMContext):
         logger.info(f"Извлечен текст из файла {file_name}: {len(file_text)} символов")
         
         if not file_text or file_text.strip() == "":
+            user_status = await get_user_status(user_id)
+            keyboard = admin_keyboard if user_status == "admin" else main_keyboard
+            
             await message.answer(
                 text="⚠️ Не удалось извлечь текст из файла. Попробуйте другой файл.",
                 parse_mode=ParseMode.HTML,
-                reply_markup=mainkeyboard_markup
+                reply_markup=keyboard
             )
             await state.clear()
             return
         
         await state.update_data(
             file_text=file_text, 
-            file_name=file_name,
-            file_bytes=file_bytes
+            file_name=file_name
         )
         await state.set_state(TaskStates.waiting_for_file_question)
         
         await message.answer(
             text=f"✅ Файл '{file_name}' успешно загружен! Извлечено {len(file_text)} символов.\n\nТеперь напишите ваш вопрос по этому файлу:",
             parse_mode=ParseMode.HTML,
-            reply_markup=mainkeyboard_markup
+            reply_markup=back_keyboard
         )
     except Exception as e:
         logger.error(f"Ошибка обработки файла: {e}")
+        user_status = await get_user_status(user_id)
+        keyboard = admin_keyboard if user_status == "admin" else main_keyboard
+        
         await message.answer(
             text="❌ Произошла ошибка при обработке файла. Попробуйте еще раз.",
             parse_mode=ParseMode.HTML,
-            reply_markup=mainkeyboard_markup
+            reply_markup=keyboard
         )
         await state.clear()
 
@@ -477,7 +408,6 @@ async def process_file_question(message: types.Message, state: FSMContext):
     data = await state.get_data()
     file_text = data.get('file_text', '')
     file_name = data.get('file_name', 'Неизвестный файл')
-    file_bytes = data.get('file_bytes', None)
     
     logger.info(f"Получен вопрос по файлу от пользователя {user_id}: {question[:50]}...")
     
@@ -487,22 +417,8 @@ async def process_file_question(message: types.Message, state: FSMContext):
     )
     
     try:
-        # Пытаемся загрузить файл напрямую в DeepSeek
-        if file_bytes:
-            logger.info("Пытаюсь загрузить файл напрямую в DeepSeek...")
-            ai_response = await ask_deepseek_with_file_upload(question, file_bytes, file_name)
-        else:
-            # Если не удалось загрузить, используем извлеченный текст
-            logger.info("Использую извлеченный текст файла...")
-            ai_response = await ask_deepseek_with_file_text(question, file_text, file_name)
-        
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                'UPDATE users SET question_amount = question_amount + 1 WHERE id = ?',
-                (user_id,)
-            )
-            await db.commit()
-        
+        ai_response = await ask_deepseek(question, file_text, file_name)
+        await increment_questions(user_id)
         await state.clear()
         
         response_text = f"""
@@ -514,21 +430,27 @@ async def process_file_question(message: types.Message, state: FSMContext):
 
 <blockquote>📝 Ваш вопрос: {question}</blockquote>
 """
+        user_status = await get_user_status(user_id)
+        keyboard = admin_keyboard if user_status == "admin" else main_keyboard
+        
         await message.answer(
             text=response_text,
             parse_mode=ParseMode.HTML,
-            reply_markup=mainkeyboard_markup
+            reply_markup=keyboard
         )
     except Exception as e:
         logger.error(f"Ошибка обработки вопроса по файлу: {e}")
+        user_status = await get_user_status(user_id)
+        keyboard = admin_keyboard if user_status == "admin" else main_keyboard
+        
         await message.answer(
             text=f"❌ Произошла ошибка при обработке вашего вопроса: {str(e)}",
             parse_mode=ParseMode.HTML,
-            reply_markup=mainkeyboard_markup
+            reply_markup=keyboard
         )
         await state.clear()
 
-@dp.callback_query(F.data == 'Помощь')
+@dp.callback_query(F.data == 'help')
 async def show_help(callback_query: types.CallbackQuery):
     help_text = """
 📞 <b>Помощь</b>
@@ -545,31 +467,14 @@ async def show_help(callback_query: types.CallbackQuery):
     await callback_query.message.edit_text(
         text=help_text,
         parse_mode=ParseMode.HTML,
-        reply_markup=helpkeyboard_markup
-    )
-    await callback_query.answer()
-
-@dp.callback_query(F.data == 'Вернуться в меню')
-async def back_to_menu(callback_query: types.CallbackQuery):
-    user_id = callback_query.from_user.id
-    user_status = await check_user_status(user_id)
-    
-    if user_status == "admin":
-        keyboard = admin_keyboard_markup
-    else:
-        keyboard = mainkeyboard_markup
-    
-    await callback_query.message.edit_text(
-        text=main_text,
-        parse_mode=ParseMode.HTML,
-        reply_markup=keyboard
+        reply_markup=back_keyboard
     )
     await callback_query.answer()
 
 @dp.callback_query(F.data == 'admin_panel')
 async def admin_panel(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
-    user_status = await check_user_status(user_id)
+    user_status = await get_user_status(user_id)
     
     if user_status != "admin":
         await callback_query.message.answer(
@@ -595,14 +500,14 @@ async def admin_panel(callback_query: types.CallbackQuery):
     await callback_query.message.edit_text(
         text=admin_text,
         parse_mode=ParseMode.HTML,
-        reply_markup=admin_keyboard_markup
+        reply_markup=admin_keyboard
     )
     await callback_query.answer()
 
 @dp.message(Command('admin_add'))
 async def add_admin(message: types.Message):
     user_id = message.from_user.id
-    sender_status = await check_user_status(user_id)
+    sender_status = await get_user_status(user_id)
     
     if sender_status != "admin":
         await message.answer("❌ У вас нет прав администратора!")
@@ -621,7 +526,7 @@ async def add_admin(message: types.Message):
 @dp.message(Command('admin_remove'))
 async def remove_admin(message: types.Message):
     user_id = message.from_user.id
-    sender_status = await check_user_status(user_id)
+    sender_status = await get_user_status(user_id)
     
     if sender_status != "admin":
         await message.answer("❌ У вас нет прав администратора!")
@@ -640,7 +545,7 @@ async def remove_admin(message: types.Message):
 @dp.message(Command('stats'))
 async def show_stats(message: types.Message):
     user_id = message.from_user.id
-    user_status = await check_user_status(user_id)
+    user_status = await get_user_status(user_id)
     
     if user_status != "admin":
         await message.answer("❌ У вас нет прав администратора!")
