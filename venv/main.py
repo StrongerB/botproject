@@ -456,11 +456,11 @@ async def show_help(callback_query: types.CallbackQuery):
 📞 <b>Помощь</b>
 
 Доступные команды:
-• /start - Главное меню
-• Профиль - Ваш профиль
-• Задать вопрос - Задать вопрос
-• Отправить файл - Отправить файл для анализа
-• Помощь - Эта справка
+<blockquote>• /start - Главное меню</blockquote>
+<blockquote>• Профиль - Ваш профиль</blockquote>
+<blockquote>• Задать вопрос - Задать вопрос</blockquote>
+<blockquote>• Отправить файл - Отправить файл для анализа</blockquote>
+<blockquote>• Помощь - Эта справка</blockquote>
 
 <i>Для получения ответа на ваш вопрос используйте соответствующие кнопки.</i>
 """
@@ -485,7 +485,7 @@ async def admin_panel(callback_query: types.CallbackQuery):
         return
     
     admin_text = """
-👑 <b>Панель администратора</b>
+👑 <i><b>Панель администратора</b></i>
 
 <b>Доступные действия:</b>
 • Выдать права администратора пользователю
